@@ -4,7 +4,7 @@ use parent 'File::Find::Rule';
 use strict;
 use warnings;
 
-use Git::Sub;
+use Git::Helpers;
 
 =head1 NAME
 
@@ -49,13 +49,24 @@ NB: if the head is currently detached (e.g. because you're running under a
 build), a simple branch name like C<master> will fail as, from git's point of
 view, there I<are> no branches. Say C<origin/master> instead.
 
+If the directory you pass to File::Find::Rule->in or File::Find::Rule->start
+isn't under a git checkout, those methods will throw an exception that looks
+like C<Not a git repository (or any of the parent directories)>.
+
 =cut
 
 sub File::Find::Rule::changed_in_git_since_branch {
     my ($invocant, $branch_name) = @_;
     my $self = $invocant->_force_object;
 
-    ...
+    $self->exec(
+        sub {
+            # First of all, make sure we have a git checkout. We won't use the
+            # return value of this, we just want to make sure that it didn't
+            # throw an exception.
+            Git::Helpers::checkout_root($File::Find::name);
+        }
+    );
 }
 
 =back
