@@ -7,6 +7,7 @@ use strict;
 use warnings;
 
 use Cwd;
+use File::pushd qw(pushd);
 use File::Spec;
 use File::Temp;
 use Test::Fatal;
@@ -66,7 +67,7 @@ sub sabotage_root_directory {
     my $cwd = Cwd::cwd();
     my $rootdir = File::Spec->rootdir;
     chdir($rootdir);
-    ok(system('sudo git init') == 0,
+    ok(system('sudo', 'git', 'init') == 0,
         'Gitify the root directory like an absolute maniac');
     test_find_git();
     ok(
@@ -86,14 +87,44 @@ sub test_compare_master {
         ||= File::Temp->newdir(
         'file-find-rule-git-changedrecently-repository-XXXX',
         TMPDIR => 1);
-    my $cwd = Cwd::cwd();
-    chdir($repository_root);
+    my $dir = pushd($repository_root);
 
-    # TODO: deal with not having set git options etc. oh God kill me now
-    pass('TODO write more stuff');
+    # Set up a git repository.
+    ### TODO: capture STDOUT / STDERR to avoid chatter
+    ok(system('git', 'init') == 0,
+        'We can set up a git repository in our new directory');
+    my $rule = File::Find::Rule->changed_in_git_since_branch('master');
+    my @files_changed;
+    my $exception;
+    my $find_files = sub {
+        $exception = exception { @files_changed = $rule->in($repository_root) };
+    };
+    $find_files->();
+    ok(
+        !$exception,
+        'No exception thrown by looking for changed files'
+    ) or diag($exception);
+    is(@files_changed, 0, q{But we didn't find anything});
 
-    # Right, back to where we were.
-    chdir($cwd);
+    # Add a couple of files. They're ignored because they haven't changed
+    # since master (because we're *in* master).
+    open(my $fh, '>', 'README');
+    print $fh "All things Mac OS!\n";
+    close $fh;
+    ok(system('git', 'add', 'README') == 0, 'Add the README');
+    ok(system('git', 'commit', '--message', 'We have a README now') == 0,
+        'Commit this README');
+    open($fh, '>', '.gitignore');
+    print $fh '.*\n';
+    close $fh;
+    ok(system('git', 'add', '.gitignore') == 0, 'Add the .gitignore');
+    ok(system('git', 'commit', '--message', 'Ignore dotfiles') == 0,
+        'Commit a .gitignore as well');
+    $find_files->();
+    ok(!$exception, 'Still no exception, now that we have a commit history')
+        or diag($exception);
+    is(@files_changed, 0, q{But we still didn't find anything});
+    
 }
 
 =for reference
