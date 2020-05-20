@@ -65,6 +65,7 @@ sub File::Find::Rule::changed_in_git_since_branch {
     my $self = $invocant->_force_object;
 
     my %changed_in_checkout;
+    my $class = __PACKAGE__;
     $self->exec(
         sub {
             # Get the canonical path, and see if we've found a checkout
@@ -91,48 +92,24 @@ sub File::Find::Rule::changed_in_git_since_branch {
                 $current_dir = $parent_dir;
             }
 
-            # OK, we have no idea about this repository. Find out.
+            # If we don't know about this checkout yet, find out.
             if (!$checkout_root) {
-                # Git doesn't understand file names, so change temporarily
-                # to the directory we found this file in.
-                my $dir = pushd($File::Find::dir);
-
-                # Find the top level directory for this repository.
-                # This will throw an exception if we're not in a git
-                # directory.
-                $checkout_root = _git('rev-parse', '--show-toplevel');
-                chomp $checkout_root;
-
-                # We're in a git working directory, so find out where
-                # this diverged from the branch we're interested in.
-                ### TODO: is --fork-point better here?
-                my $branch_points;
-                eval {
-                    $branch_points
-                        = _git('merge-base', '--all', 'HEAD', $branch_name);
-                    1;
-                } or do {
-                    # We'll get this if we're in a repository with no commits
-                    # yet.
-                    if ($EVAL_ERROR =~ /Not a valid object name HEAD/) {
-                        $changed_in_checkout{$checkout_root} = [];
-                        return 0;
-                    }
-                    carp "Couldn't do git merge-base: $EVAL_ERROR";
+                my @files_changed;
+                ($checkout_root, @files_changed)
+                    = $class->files_changed_in_branch($branch_name);
+                $changed_in_checkout{$checkout_root} = {
+                    map { $_ => 1 } @files_changed
                 };
-                my $first_branch_point = (split(/\n/, $branch_points))[0];
-
-                # Now find the files that are different.
-                my $diff_list
-                    = _git('diff', '--name-status', $first_branch_point);
-                $changed_in_checkout{$checkout_root} = 'TODO: find stuff';
             }
             
-            ### TODO: work out if something has in fact changed.
-            return 0;
+            # Either way, we have a lookup table, so use it.
+            return
+                exists $changed_in_checkout{$checkout_root}
+                {$File::Find::name};
         }
     );
 }
+
 
 sub _git {
     my ($command, @arguments) = @_;
@@ -144,6 +121,56 @@ sub _git {
         die $stderr;
     }
     return $stdout;
+}
+
+sub files_changed_in_branch {
+    my ($class, $branch_name) = @_;
+
+    # Git doesn't understand file names, so change temporarily
+    # to the directory we found this file in.
+    my $dir = pushd($File::Find::dir);
+
+    # Find the top level directory for this repository.
+    # This will throw an exception if we're not in a git
+    # directory.
+    my $checkout_root = _git('rev-parse', '--show-toplevel');
+    chomp $checkout_root;
+
+    # We're in a git working directory, so find out where
+    # this diverged from the branch we're interested in.
+    my $branch_points;
+    eval {
+        $branch_points
+            = _git('merge-base', '--all', 'HEAD', $branch_name);
+        1;
+    } or do {
+
+        # We'll get this if we're in a repository with no commits
+        # yet.
+        if ($EVAL_ERROR =~ /Not a valid object name HEAD/) {
+            return ($checkout_root);
+        }
+        carp "Couldn't do git merge-base: $EVAL_ERROR";
+    };
+    my $first_branch_point = (split(/\n/, $branch_points))[0];
+
+    # Now find the files that are different.
+    my $diff_output
+        = _git('diff', '--name-status', '--no-color', $first_branch_point);
+    my @files_changed;
+    line:
+    for my $diff_line (split(/\n/, $diff_output)) {
+        my ($action, $result) = ($diff_line =~ /^(\S+) \s+ (.+) $/x);
+
+        # Don't care about deleted files; by definition they won't
+        # be found by File::Find.
+        next line if $action eq 'D';
+
+        # TODO: cope with renames.
+        push @files_changed, File::Spec->catfile($checkout_root, $result);
+    }
+
+    return ($checkout_root, @files_changed);
 }
 
 =back

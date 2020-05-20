@@ -8,6 +8,7 @@ use warnings;
 
 use Capture::Tiny qw(capture);
 use Cwd;
+use Data::Dumper;
 use File::pushd qw(pushd);
 use File::Spec;
 use File::Temp;
@@ -25,6 +26,7 @@ if ($ENV{AUTHOR_TESTING}) {
 }
 our $repository_root;
 subtest('Comparing master with master is pointless' => \&test_compare_master);
+subtest('We can find changes in a branch' => \&test_find_branch_changes);
 
 done_testing();
 
@@ -82,6 +84,7 @@ sub sabotage_root_directory {
 
 # Even with a basic git repository and a series of commits, comparing master
 # with master will by necessity produce nothing.
+# This sets up master with a few commits, and sets $repository_root.
 
 sub test_compare_master {
     # Make sure we have a repository directory. Change to it, so git knows
@@ -140,6 +143,52 @@ sub test_compare_master {
     ok(!$exception, 'Still no exception, now that we have a commit history')
         or diag($exception);
     is(@files_changed, 0, q{But we still didn't find anything});
+}
+
+# Once we add files to a branch, they're picked up.
+
+sub test_find_branch_changes {
+    # Create a new branch and expand the list of Mac OS versions into
+    # individual files.
+    my $dir = pushd($repository_root);
+    git_ok('Create a new branch',   'branch',   'structured');
+    git_ok('Switch to that branch', 'checkout', 'structured');
+    my @expect_files_changed;
+    mkdir('mac os versions', 0755);
+    my $mac_os_dir = pushd('mac os versions');
+    for my $os_details (@{ $mac_os_versions{cats} }) {
+        mkdir($os_details->{codename}, 0755);
+        my $release_dir = pushd($os_details->{codename});
+        for my $field (qw(release_date os_url)) {
+            open(my $fh, '>', $field);
+            print $fh $os_details->{$field};
+            close $fh;
+            git_ok(
+                sprintf('Add %s %s %s',
+                    $os_details->{codename}, $field,
+                    $os_details->{$field}),
+                'add', $field
+            );
+            push @expect_files_changed,
+                File::Spec->catfile(
+                $repository_root,
+                'mac os versions',
+                $os_details->{codename}, $field
+                );
+        }
+    }
+    undef $mac_os_dir;
+    git_ok(
+        'Commit this bunch of new files',
+        'commit', '--message', 'Split these details into directories'
+    );
+    my $rule = File::Find::Rule->changed_in_git_since_branch('master');
+    my @files_changed = $rule->in($repository_root);
+    is_deeply(
+        [sort @files_changed],
+        [sort @expect_files_changed],
+        'We picked up all the added files'
+    ) or diag dumper(@files_changed);
 }
 
 =for reference
@@ -276,5 +325,12 @@ sub git_ok {
         join(' ', @git_args),
         $stdout, $stderr
         );
+}
+
+sub dumper {
+    local $Data::Dumper::Indent = 1;
+    local $Data::Dumper::Sortkeys = 1;
+    local $Data::Dumper::Terse = 1;
+    return Dumper(@_);
 }
 
