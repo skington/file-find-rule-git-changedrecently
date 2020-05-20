@@ -27,6 +27,7 @@ if ($ENV{AUTHOR_TESTING}) {
 our $repository_root;
 subtest('Comparing master with master is pointless' => \&test_compare_master);
 subtest('We can find changes in a branch' => \&test_find_branch_changes);
+subtest('Branches must exist' => \&test_compare_non_existent_branch);
 
 done_testing();
 
@@ -191,13 +192,28 @@ sub test_find_branch_changes {
     ) or diag dumper(@files_changed);
 }
 
+# You can't compare changes from a non-existent branch.
+
+sub test_compare_non_existent_branch {
+    my $rule = File::Find::Rule->changed_in_git_since_branch('no_such_branch');
+    my ($stdout, $stderr, @files_changed) = capture {
+        $rule->in($repository_root);
+    };
+    is(scalar @files_changed, 0,
+        'No files found compared to a non-existent branch');
+    like(
+        $stderr,
+        qr{
+            ^
+            \QCouldn't find divergence point from branch no_such_branch\E
+           .+
+           \Qvalid object name\E
+        }xi,
+        'We complained about a bad branch name'
+    );
+}
+
 =for reference
-
-Create a new git repository. Add a README and a .gitignore, as separate commits.
-We now don't crash, but we return nothing, because there aren't branches.
-Test that we even don't crash if we're not in that directory.
-
-If we ask to compare with a branch that doesn't exist, though, we get errors.
 
 Test that:
 * we cope with files being renamed

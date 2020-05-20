@@ -150,7 +150,10 @@ sub files_changed_in_branch {
         if ($EVAL_ERROR =~ /Not a valid object name HEAD/) {
             return ($checkout_root);
         }
-        carp "Couldn't do git merge-base: $EVAL_ERROR";
+
+        carp "Couldn't find divergence point from branch $branch_name: ",
+            $EVAL_ERROR;
+        return $checkout_root;
     };
     my $first_branch_point = (split(/\n/, $branch_points))[0];
 
