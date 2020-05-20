@@ -6,6 +6,7 @@
 use strict;
 use warnings;
 
+use Capture::Tiny qw(capture);
 use Cwd;
 use File::pushd qw(pushd);
 use File::Spec;
@@ -14,6 +15,8 @@ use Test::Fatal;
 use Test::More;
 
 use_ok('File::Find::Rule::Git::ChangedRecently');
+
+my %mac_os_versions = _mac_os_version_details();
 
 subtest('We must be able to find a .git directory'  => \&test_find_git);
 if ($ENV{AUTHOR_TESTING}) {
@@ -90,9 +93,7 @@ sub test_compare_master {
     my $dir = pushd($repository_root);
 
     # Set up a git repository.
-    ### TODO: capture STDOUT / STDERR to avoid chatter
-    ok(system('git', 'init') == 0,
-        'We can set up a git repository in our new directory');
+    git_ok('We can set up a git repository in our new directory', 'init');
     my $rule = File::Find::Rule->changed_in_git_since_branch('master');
     my @files_changed;
     my $exception;
@@ -106,25 +107,39 @@ sub test_compare_master {
     ) or diag($exception);
     is(@files_changed, 0, q{But we didn't find anything});
 
-    # Add a couple of files. They're ignored because they haven't changed
+    # Add a few files. They're ignored because they haven't changed
     # since master (because we're *in* master).
     open(my $fh, '>', 'README');
     print $fh "All things Mac OS!\n";
     close $fh;
-    ok(system('git', 'add', 'README') == 0, 'Add the README');
-    ok(system('git', 'commit', '--message', 'We have a README now') == 0,
-        'Commit this README');
+    git_ok('Add the README', 'add', 'README');
+    git_ok(
+        'Commit this README',
+        'commit', '--message', 'We have a README now'
+    );
     open($fh, '>', '.gitignore');
-    print $fh '.*\n';
+    print $fh ".*\n";
     close $fh;
-    ok(system('git', 'add', '.gitignore') == 0, 'Add the .gitignore');
-    ok(system('git', 'commit', '--message', 'Ignore dotfiles') == 0,
-        'Commit a .gitignore as well');
+    git_ok('Add the .gitignore', 'add', '--force', '.gitignore');
+    git_ok(
+        'Commit a .gitignore as well',
+        'commit', '--message', 'Ignore dotfiles'
+    );
+    open($fh, '>', 'mac-os-versions');
+    for my $os_details (@{ $mac_os_versions{cats} }) {
+        printf $fh "%s: %s (%s)\n",
+            @$os_details{qw(codename release_date os_url)};
+    }
+    close $fh;
+    git_ok('Add mac-os-versions', 'add', 'mac-os-versions');
+    git_ok(
+        'Commit the first iteration of Mac OS versions',
+        'commit', '--message', 'Big cat Mac OS versions'
+    );
     $find_files->();
     ok(!$exception, 'Still no exception, now that we have a commit history')
         or diag($exception);
     is(@files_changed, 0, q{But we still didn't find anything});
-    
 }
 
 =for reference
@@ -160,4 +175,106 @@ know about Puma vs Mountain Lion.
 
 
 =cut
+
+sub _mac_os_version_details {
+    return (
+        cats => [
+            {
+                codename     => 'Cheetah',
+                release_date => '2001-03-24',
+                os_url       => 'https://en.wikipedia.org/wiki/Mac_OS_X_10.0',
+            },
+            {
+                codename     => 'Puma',
+                release_date => '2001-09-25',
+                os_url       => 'https://en.wikipedia.org/wiki/Mac_OS_X_10.1',
+            },
+            {
+                codename     => 'Jaguar',
+                release_date => '2002-08-23',
+                os_url       => 'https://en.wikipedia.org/wiki/Mac_OS_X_10.2',
+            },
+            {
+                codename     => 'Panther',
+                release_date => '2003-10-24',
+                os_url => 'https://en.wikipedia.org/wiki/Mac_OS_X_Panther',
+            },
+            {
+                codename     => 'Tiger',
+                release_date => '2005-04-29',
+                os_url => 'https://en.wikipedia.org/wiki/Mac_OS_X_Tiger',
+            },
+            {
+                codename     => 'Leopard',
+                release_date => '2007-10-26',
+                os_url => 'https://en.wikipedia.org/wiki/Mac_OS_X_Leopard',
+            },
+            {
+                codename     => 'Snow Leopard',
+                release_date => '2009-08-28',
+                os_url =>
+                    'https://en.wikipedia.org/wiki/Mac_OS_X_Snow_Leopard',
+            },
+            {
+                codename     => 'Lion',
+                release_date => '2011-07-20',
+                os_url       => 'https://en.wikipedia.org/wiki/Mac_OS_X_Lion',
+            },
+            {
+                codename     => 'Mountain Lion',
+                release_date => '2012-07-25',
+                os_url => 'https://en.wikipedia.org/wiki/OS_X_Mountain_Lion',
+            }
+        ],
+        california => [
+            {
+                codename     => 'Mavericks',
+                release_date => '2013-10-22',
+                os_url => 'https://en.wikipedia.org/wiki/OS_X_Mavericks',
+            },
+            {
+                codename     => 'Yosemite',
+                release_date => '2014-10-16',
+                os_url       => 'https://en.wikipedia.org/wiki/OS_X_Yosemite',
+            },
+            {
+                codename     => 'El Capitan',
+                release_date => '2015-09-30',
+                os_url => 'https://en.wikipedia.org/wiki/OS_X_El_Capitan',
+            },
+            {
+                codename     => 'Sierra',
+                release_date => '2016-09-20',
+                os_url       => 'https://en.wikipedia.org/wiki/MacOS_Sierra',
+            },
+            {
+                codename     => 'High Sierra',
+                release_date => '2017-09-25',
+                os_url => 'https://en.wikipedia.org/wiki/MacOS_High_Sierra',
+            },
+            {
+                codename     => 'Mojave',
+                release_date => '2018-09-24',
+                os_url       => 'https://en.wikipedia.org/wiki/MacOS_Mojave',
+            },
+            {
+                codename     => 'Catalina',
+                release_date => '2019-10-07',
+                os_url => 'https://en.wikipedia.org/wiki/MacOS_Catalina',
+            }
+        ],
+    );
+}
+
+sub git_ok {
+    my ($title, @git_args) = @_;
+
+    my ($stdout, $stderr, $exit_code) = capture { system('git', @git_args); };
+    ok($exit_code == 0, $title)
+        or diag sprintf(
+        "When running git %s:\nSTDOUT:\n%s\n\nSTDERR:\n%s\n\n",
+        join(' ', @git_args),
+        $stdout, $stderr
+        );
+}
 
