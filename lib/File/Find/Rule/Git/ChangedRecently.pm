@@ -101,6 +101,7 @@ sub File::Find::Rule::changed_in_git_since_branch {
                 # This will throw an exception if we're not in a git
                 # directory.
                 $checkout_root = _git('rev-parse', '--show-toplevel');
+                chomp $checkout_root;
 
                 # We're in a git working directory, so find out where
                 # this diverged from the branch we're interested in.
