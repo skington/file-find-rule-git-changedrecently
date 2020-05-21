@@ -13,9 +13,12 @@ use English qw(-no_match_vars);
 use File::pushd qw(pushd);
 use File::Spec;
 use File::Temp;
+use Test::Requires::Git;
 use Test2::V0;
 
 use File::Find::Rule::Git::ChangedRecently;
+
+test_requires_git();
 
 my %mac_os_versions = _mac_os_version_details();
 
