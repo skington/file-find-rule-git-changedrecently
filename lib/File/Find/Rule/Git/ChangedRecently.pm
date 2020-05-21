@@ -50,13 +50,29 @@ smaller list of files to perlcritic, Devel::Cover, etc. etc.
 Limits the files found to only those that have changed in git since the current
 branch was branched from C<$branch_name>.
 
-NB: if the head is currently detached (e.g. because you're running under a
+Note that this won't list deleted files, because, well, they've been deleted;
+File::Find won't find them either. And it I<will> find renamed files, even if
+the rename is the only thing that's happened to them, because (a) they've
+nonetheless been moved, and (b) their new location might matter.
+
+B<NB>: if the head is currently detached (e.g. because you're running under a
 build), a simple branch name like C<master> will fail as, from git's point of
 view, there I<are> no branches. Say C<origin/master> instead.
 
 If the directory you pass to File::Find::Rule->in or File::Find::Rule->start
 isn't under a git checkout, those methods will throw an exception that looks
 like C<Not a git repository (or any of the parent directories)>.
+
+B<NB>: for speed, git details are cached as part of the execution of this rule.
+So don't say
+
+ my $rule = File::Find::Rule->changed_in_git_since_branch('master');
+ my @all_files_changed = $rule->in($some_directory);
+ # do stuff that will change the checkout, potentially
+ my @other_files_changed = $rule->in($some_directory);
+
+and expect the two lists to be different. When in doubt, generate a new rule
+object every time.
 
 =cut
 
@@ -169,7 +185,13 @@ sub files_changed_in_branch {
         # be found by File::Find.
         next line if $action eq 'D';
 
-        # TODO: cope with renames.
+        # Anything else has changed in some way. We won't see R (rename)
+        # because we didn't supply the --find-renames switch, as we don't
+        # care: what matters is that we get told about the file that *has*
+        # changed, and we don't care about the old file name because, like for
+        # deletions above, it doesn't exist so would never have been found.
+        # Similarly, because we didn't provide --find-copies, we won't see
+        # C (copy).
         push @files_changed, File::Spec->catfile($checkout_root, $result);
     }
 

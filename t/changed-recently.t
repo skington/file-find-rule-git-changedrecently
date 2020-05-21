@@ -12,10 +12,9 @@ use Data::Dumper;
 use File::pushd qw(pushd);
 use File::Spec;
 use File::Temp;
-use Test::Fatal;
-use Test::More;
+use Test2::V0;
 
-use_ok('File::Find::Rule::Git::ChangedRecently');
+use File::Find::Rule::Git::ChangedRecently;
 
 my %mac_os_versions = _mac_os_version_details();
 
@@ -26,8 +25,9 @@ if ($ENV{AUTHOR_TESTING}) {
 }
 our $repository_root;
 subtest('Comparing master with master is pointless' => \&test_compare_master);
-subtest('We can find changes in a branch' => \&test_find_branch_changes);
-subtest('Branches must exist' => \&test_compare_non_existent_branch);
+subtest('We find changes in a branch'  => \&test_find_simple_branch_changes);
+subtest('Branches must exist'          => \&test_compare_non_existent_branch);
+subtest('We cope with complex changes' => \&test_find_complex_branch_changes);
 
 done_testing();
 
@@ -56,7 +56,7 @@ sub test_find_git {
 
     my $rule = File::Find::Rule->changed_in_git_since_branch('master');
     like(
-        exception { $rule->in($rootdir); },
+        dies { $rule->in($rootdir); },
         qr/git repository/,
         q{The root directory isn't a git checkout, so :shrug-emoji:}
     );
@@ -98,11 +98,12 @@ sub test_compare_master {
 
     # Set up a git repository.
     git_ok('We can set up a git repository in our new directory', 'init');
-    my $rule = File::Find::Rule->changed_in_git_since_branch('master');
     my @files_changed;
-    my $exception;
+    my ($rule, $exception);
     my $find_files = sub {
-        $exception = exception { @files_changed = $rule->in($repository_root) };
+        $rule = File::Find::Rule->changed_in_git_since_branch('master');
+        $exception
+            = dies { @files_changed = $rule->in($repository_root) };
     };
     $find_files->();
     ok(
@@ -148,7 +149,7 @@ sub test_compare_master {
 
 # Once we add files to a branch, they're picked up.
 
-sub test_find_branch_changes {
+sub test_find_simple_branch_changes {
     # Create a new branch and expand the list of Mac OS versions into
     # individual files.
     my $dir = pushd($repository_root);
@@ -183,9 +184,10 @@ sub test_find_branch_changes {
         'Commit this bunch of new files',
         'commit', '--message', 'Split these details into directories'
     );
-    my $rule = File::Find::Rule->changed_in_git_since_branch('master');
-    my @files_changed = $rule->in($repository_root);
-    is_deeply(
+    my @files_changed
+        = File::Find::Rule->changed_in_git_since_branch('master')
+        ->in($repository_root);
+    is(
         [sort @files_changed],
         [sort @expect_files_changed],
         'We picked up all the added files'
@@ -195,9 +197,9 @@ sub test_find_branch_changes {
 # You can't compare changes from a non-existent branch.
 
 sub test_compare_non_existent_branch {
-    my $rule = File::Find::Rule->changed_in_git_since_branch('no_such_branch');
     my ($stdout, $stderr, @files_changed) = capture {
-        $rule->in($repository_root);
+        File::Find::Rule->changed_in_git_since_branch('no_such_branch')
+            ->in($repository_root);
     };
     is(scalar @files_changed, 0,
         'No files found compared to a non-existent branch');
@@ -213,16 +215,140 @@ sub test_compare_non_existent_branch {
     );
 }
 
+# We can cope with files being deleted and moved about.
+
+sub test_find_complex_branch_changes {
+    my $dir = pushd($repository_root);
+    my $find_files_master = sub {
+        File::Find::Rule->changed_in_git_since_branch('master')
+            ->in($repository_root)
+    };
+
+    # Add a changed mac-os-versions file in master. It doesn't show up in
+    # the list of changed files, because while it's changed in master,
+    # it hasn't changed in *this* branch, nor in the part of master that this
+    # branch was branched from. It doesn't matter that it's been changed
+    # recently, because we're not looking at the entire version control tree,
+    # just this branch and its history.
+    git_ok('Switch back to master', 'checkout', 'master');
+    open(my $fh, '>>', 'mac-os-versions');
+    for my $os_details (@{ $mac_os_versions{california} }) {
+        printf $fh "%s: %s (%s)\n",
+            @$os_details{qw(codename release_date os_url)};
+    }
+    close $fh;
+    git_ok('Commit this extended list of Mac OS versions',
+        'commit', '--all', '--message', 'Know about newer versions of Mac OS');
+    git_ok('Switch back to the structured branch',
+        'checkout', 'structured');
+    my @files_changed = $find_files_master->();
+    ok(
+        !(grep { $_ eq 'mac-os-versions' } @files_changed),
+        'No changes in mac-os-versions since this branch was created'
+            . '; changes in master *since* then, but so what?'
+    );
+
+    # Back in the structured branch, move mac-os-versions to indicate that
+    # it's not as important. We spot the rename.
+    git_ok(
+        'Move that old text file somewhere less prominent',
+        'mv',
+        'mac-os-versions',
+        File::Spec->catfile('mac os versions', 'summary')
+    );
+    git_ok('Commit this change',
+        'commit', '--message', 'Tidy this out of the way');
+    @files_changed = $find_files_master->();
+    ok(!(grep { /mac-os-versions/ } @files_changed),
+        'No sign of the old file - because it no longer exists');
+    ok((grep { /summary/ } @files_changed),
+        'The summary file is marked as having been renamed');
+
+    # Right, create a third branch, branched from the structured branch.
+    # This is where we'll add details of the various Wikipedia articles about
+    # the big cats that Mac OS versions are named after.
+    git_ok('Create a third branch, for more links', 'branch',   'more_links');
+    git_ok('Switch to it',                          'checkout', 'more_links');
+    my $mac_os_dir = pushd('mac os versions');
+    for my $os_details (@{ $mac_os_versions{cats} }) {
+        my $release_dir = pushd($os_details->{codename});
+        open (my $fh, '>', 'subject_url');
+        print $fh $os_details->{subject_url};
+        close $fh;
+        git_ok('Add a subject URL for ' . $os_details->{codename},
+            'add', 'subject_url');
+    }
+    git_ok(
+        'Add these subject URL files',
+        'commit', '--message', 'Say what these refer to'
+    );
+
+    # They show up if we compare this branch to master, obviously.
+    # If we compare this branch with the structured branch, they're *all*
+    # that shows up.
+    my @all_files_changed = $find_files_master->();
+    my @subject_url_files_changed = grep { /subject_url/ } @all_files_changed;
+    is(
+        scalar @subject_url_files_changed,
+        scalar @{ $mac_os_versions{cats} },
+        'We have a subject_url file for each cat-themed version of Mac OS'
+    );
+    my $find_files_structured_branch = sub {
+        File::Find::Rule->changed_in_git_since_branch('structured')
+            ->in($repository_root)
+    };
+    my @structured_branch_files_changed = $find_files_structured_branch->();
+    is(
+        [sort @structured_branch_files_changed],
+        [sort @subject_url_files_changed],
+        'The only difference between the two non-master branches is these files'
+    );
+
+    # Apple thinks Cougars and Pumas are different things; similarly, that
+    # Panthers and Leopards are different things. They're not, so get rid of
+    # the duplicates.
+    git_ok(
+        'Get rid of Mountain Lion, which is the same as a Puma',
+        'rm',
+        my $path_mountain_lion
+            = File::Spec->catdir('Mountain Lion', 'subject_url')
+    );
+    git_ok('Get rid of Panther, which is the same as a Leopard',
+        'rm',
+        my $path_panther = File::Spec->catdir('Panther', 'subject_url')
+    );
+    git_ok('Commit this', 'commit', '--message', 'Remove redundant files');
+    my @limited_subject_url_files_changed
+        = grep { !/(Mountain Lion|Panther)/ } @subject_url_files_changed;
+    is(
+        [sort $find_files_structured_branch->()],
+        [sort @limited_subject_url_files_changed],
+        'Those two files are now gone from the list of changed files'
+    );
+
+    # Subsequently people complain that they can't find the subject URL
+    # files, so add symlinks.
+    my $path_puma = File::Spec->catdir('Puma', 'subject_url');
+    my $path_leopard = File::Spec->catdir('Leopard', 'subject_url');
+    symlink($path_puma,    $path_mountain_lion);
+    symlink($path_leopard, $path_panther);
+    git_ok('Add a symlink of puma -> mountain lion',
+        'add', $path_mountain_lion);
+    git_ok('Add a symlink of leopard -> panther',
+        'add', $path_panther);
+    git_ok('Push those symlink changes',
+        'commit', '--message', 'Restore this dupes as symlinks');
+    is(
+        [sort $find_files_structured_branch->()],
+        [sort @subject_url_files_changed],
+        'We now have the complete set again'
+    );
+}
+
 =for reference
 
 Test that:
-* we cope with files being renamed
-* we can cope with symlinks
-* we're not just dealing with date-based comparisons: make changes in master
-  and our branch doesn't pick those changes up.
-* we're dealing with individual branches: branch of another branch,
-  and the second branch has a much more limited set of changes compared to
-  its immediate branch than when compared to master.
+* we can cope with files being copied
 * merge the first branch: the second branch still has shitloads of changes
   compared to master because its base is the *old* maser.
 * but the first branch has no changes compared to master
@@ -248,47 +374,56 @@ sub _mac_os_version_details {
                 codename     => 'Cheetah',
                 release_date => '2001-03-24',
                 os_url       => 'https://en.wikipedia.org/wiki/Mac_OS_X_10.0',
+                subject_url  => 'https://en.wikipedia.org/wiki/Cheetah',
             },
             {
                 codename     => 'Puma',
                 release_date => '2001-09-25',
                 os_url       => 'https://en.wikipedia.org/wiki/Mac_OS_X_10.1',
+                subject_url  => 'https://en.wikipedia.org/wiki/Cougar',
             },
             {
                 codename     => 'Jaguar',
                 release_date => '2002-08-23',
                 os_url       => 'https://en.wikipedia.org/wiki/Mac_OS_X_10.2',
+                subject_url  => 'https://en.wikipedia.org/wiki/Jaguar',
             },
             {
                 codename     => 'Panther',
                 release_date => '2003-10-24',
                 os_url => 'https://en.wikipedia.org/wiki/Mac_OS_X_Panther',
+                subject_url => 'https://en.wikipedia.org/wiki/Leopard',
             },
             {
                 codename     => 'Tiger',
                 release_date => '2005-04-29',
-                os_url => 'https://en.wikipedia.org/wiki/Mac_OS_X_Tiger',
+                os_url      => 'https://en.wikipedia.org/wiki/Mac_OS_X_Tiger',
+                subject_url => 'https://en.wikipedia.org/wiki/Tiger',
             },
             {
                 codename     => 'Leopard',
                 release_date => '2007-10-26',
                 os_url => 'https://en.wikipedia.org/wiki/Mac_OS_X_Leopard',
+                subject_url => 'https://en.wikipedia.org/wiki/Leopard',
             },
             {
                 codename     => 'Snow Leopard',
                 release_date => '2009-08-28',
                 os_url =>
                     'https://en.wikipedia.org/wiki/Mac_OS_X_Snow_Leopard',
+                subject_url => 'https://en.wikipedia.org/wiki/Snow_leopard',
             },
             {
                 codename     => 'Lion',
                 release_date => '2011-07-20',
                 os_url       => 'https://en.wikipedia.org/wiki/Mac_OS_X_Lion',
+                subject_url  => 'https://en.wikipedia.org/wiki/Lion',
             },
             {
                 codename     => 'Mountain Lion',
                 release_date => '2012-07-25',
                 os_url => 'https://en.wikipedia.org/wiki/OS_X_Mountain_Lion',
+                subject_url => 'https://en.wikipedia.org/wiki/Cougar',
             }
         ],
         california => [
