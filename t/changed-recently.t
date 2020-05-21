@@ -9,6 +9,7 @@ use warnings;
 use Capture::Tiny qw(capture);
 use Cwd;
 use Data::Dumper;
+use English qw(-no_match_vars);
 use File::pushd qw(pushd);
 use File::Spec;
 use File::Temp;
@@ -343,29 +344,51 @@ sub test_find_complex_branch_changes {
         [sort @subject_url_files_changed],
         'We now have the complete set again'
     );
+
+    # Merge master into the structured branch - everything goes ahead,
+    # and only the summary file is marked as having changed, as git was clever
+    # enough to realise that we'd moved it in this branch.
+    git_ok('Switch back to the structured branch', 'checkout', 'structured');
+    git_ok(
+        'Merge master into the structured branch', 'merge', 'master',
+        '--message', 'Merge master changes into structured'
+    );
+    @files_changed = $find_files_master->();
+    ok(!(grep { /mac-os-versions/ } @files_changed),
+        q{The old list of Mac OS versions still isn't mentioned});
+    ok((grep { /summary/ } @files_changed),
+        'The summary file is marked as having been changed');
+    my $summary_contents = do {
+        local $INPUT_RECORD_SEPARATOR = undef;
+        open(my $fh, '<', 'summary');
+        <$fh>
+    };
+    like($summary_contents, qr/Catalina/,
+        'The summary file contains the newer Mac OS versions');
+
+    # Merge the structured branch into master: now there are no differences.
+    undef $mac_os_dir;
+    git_ok('Switch to master', 'checkout', 'master');
+    git_ok(
+        'Merge the structured branch into master',
+        'merge', 'structured',
+        '--message', 'Make a structure of files'
+    );
+    git_ok('Switch to structured branch', 'checkout', 'structured');
+    @files_changed = $find_files_master->();
+    is([@files_changed], [],
+        'There are no longer any changes compared to master');
+
+    # In the more_links branch, though, there are still loads of changes
+    # compared to master.
+    git_ok('Switch to the more_links branch', 'checkout', 'more_links');
+    @files_changed = $find_files_master->();
+    is(
+        [sort @files_changed],
+        [sort @subject_url_files_changed],
+        'Only the subject_url files have changed now'
+    );
 }
-
-=for reference
-
-Test that:
-* we can cope with files being copied
-* merge the first branch: the second branch still has shitloads of changes
-  compared to master because its base is the *old* maser.
-* but the first branch has no changes compared to master
-* merge master into the second branch: we now have a smaller set of changes.
-
-Start out with just a list of Mac OS versions, all in one file, with
-release dates and wikipedia URL for the version of mac OS.
-New branch "references" gets rid of the one file and creates directories for
-all the cat-named versions, with release-date and url files.
-In master we add the California details; this causes a merge conflict.
-We undelete the file in the branch and merge.
-
-In a separate branch we add cat links, including symlinks when we already
-know about Puma vs Mountain Lion.
-
-
-=cut
 
 sub _mac_os_version_details {
     return (
