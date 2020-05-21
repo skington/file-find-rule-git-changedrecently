@@ -112,7 +112,7 @@ sub File::Find::Rule::changed_in_git_since_branch {
             if (!$checkout_root) {
                 my @files_changed;
                 ($checkout_root, @files_changed)
-                    = $class->files_changed_in_branch($branch_name);
+                    = $class->_files_changed_in_branch($branch_name);
                 $changed_in_checkout{$checkout_root} = {
                     map { $_ => 1 } @files_changed
                 };
@@ -139,7 +139,7 @@ sub _git {
     return $stdout;
 }
 
-sub files_changed_in_branch {
+sub _files_changed_in_branch {
     my ($class, $branch_name) = @_;
 
     # Git doesn't understand file names, so change temporarily
